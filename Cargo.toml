@@ -1,0 +1,13 @@
+[package]
+name = "robonomics-discovery"
+description = "Robonomics Network discovery service."
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+log = "0.4.17"
+env_logger = "0.9.0"
+clap = { version = "3.1.18", features = ["derive"] }
+libp2p = "0.45.0"
+futures = "0.3.21"
+async-std = {version = "1.11.0", features = ["attributes"]}
