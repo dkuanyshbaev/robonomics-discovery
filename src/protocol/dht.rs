@@ -16,8 +16,12 @@
 //
 ///////////////////////////////////////////////////////////////////////////////
 
+use libp2p::{identity, PeerId};
 use std::error::Error;
 
-pub async fn kad() -> Result<(), Box<dyn Error>> {
+pub async fn kad(
+    _local_key: identity::Keypair,
+    _local_peer_id: PeerId,
+) -> Result<(), Box<dyn Error>> {
     Ok(())
 }

@@ -17,6 +17,7 @@
 ///////////////////////////////////////////////////////////////////////////////
 
 use clap::Parser;
+use libp2p::{identity, PeerId};
 use std::error::Error;
 
 pub mod protocol;
@@ -36,14 +37,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
     env_logger::init();
     let args = Args::parse();
 
+    // Create a random PeerId.
+    let local_key = identity::Keypair::generate_ed25519();
+    let local_peer_id = PeerId::from(local_key.public());
+    log::info!("Local peer ID: {:?}", local_peer_id);
+
     if !args.disable_kad {
         log::info!("Starting DHT discovery service.");
-        protocol::dht::kad().await?;
+        protocol::dht::kad(local_key.clone(), local_peer_id.clone()).await?;
     }
 
     if !args.disable_mdns {
         log::info!("Starting MDNS discovery service.");
-        protocol::mdns::mdns().await?;
+        protocol::mdns::mdns(local_key, local_peer_id).await?;
     }
 
     Ok(())

@@ -25,14 +25,12 @@ use libp2p::{
 };
 use std::error::Error;
 
-pub async fn mdns() -> Result<(), Box<dyn Error>> {
-    // Create a random PeerId.
-    let id_keys = identity::Keypair::generate_ed25519();
-    let peer_id = PeerId::from(id_keys.public());
-    println!("Local peer id: {:?}", peer_id);
-
+pub async fn mdns(
+    local_key: identity::Keypair,
+    local_peer_id: PeerId,
+) -> Result<(), Box<dyn Error>> {
     // Create a transport.
-    let transport = libp2p::development_transport(id_keys).await?;
+    let transport = libp2p::development_transport(local_key).await?;
 
     // Create an MDNS network behaviour.
     let behaviour = Mdns::new(MdnsConfig::default()).await?;
@@ -40,7 +38,7 @@ pub async fn mdns() -> Result<(), Box<dyn Error>> {
     // Create a Swarm that establishes connections through the given transport.
     // Note that the MDNS behaviour itself will not actually inititiate any connections,
     // as it only uses UDP.
-    let mut swarm = Swarm::new(transport, behaviour, peer_id);
+    let mut swarm = Swarm::new(transport, behaviour, local_peer_id);
     swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
 
     loop {
