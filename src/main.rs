@@ -193,7 +193,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Use DHT.
     let kademlia = if !args.disable_kad {
-        log::info!("Using mDNS discovery service.");
+        log::info!("Using DHT discovery service.");
         let store = MemoryStore::new(local_peer_id);
         let kademlia = Kademlia::new(local_peer_id, store);
         Toggle::from(Some(kademlia))
