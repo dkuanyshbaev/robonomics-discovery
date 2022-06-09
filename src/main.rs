@@ -95,7 +95,7 @@ impl NetworkBehaviourEventProcess<KademliaEvent> for RobonomicsNetworkBehaviour 
             KademliaEvent::RoutingUpdated { peer, .. } => {
                 log::info!("new peer: {:?}", peer);
 
-                self.pubsub.add_explicit_peer(&peer);
+                // self.pubsub.add_explicit_peer(&peer);
             }
             // KademliaEvent::InboundRequest { request } => {
             //     log::info!("here!");
@@ -207,7 +207,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
             SwarmEvent::NewListenAddr { address, .. } => {
                 println!("Listening on {:?}", address);
             }
-            _ => {}
+            e => {
+                println!(">>>>>>>>> {:?}", e);
+            } // _ => {}
         }
     }
 }
