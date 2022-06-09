@@ -18,15 +18,18 @@
 
 use async_std::task;
 use clap::Parser;
-use futures::{prelude::*, select};
+use futures::prelude::*;
 use libp2p::{
     development_transport,
     gossipsub::{
-        Gossipsub, GossipsubConfigBuilder, GossipsubEvent, GossipsubMessage, MessageAuthenticity,
-        MessageId,
+        Gossipsub, GossipsubConfigBuilder, GossipsubEvent, GossipsubMessage, IdentTopic as Topic,
+        MessageAuthenticity, MessageId,
     },
     identity,
-    kad::{record::store::MemoryStore, Kademlia, KademliaEvent, QueryResult},
+    kad::{
+        record::store::MemoryStore, AddProviderOk, Kademlia, KademliaEvent, PeerRecord,
+        PutRecordOk, QueryResult, Record,
+    },
     mdns::{Mdns, MdnsConfig, MdnsEvent},
     swarm::{behaviour::toggle::Toggle, NetworkBehaviourEventProcess, SwarmEvent},
     NetworkBehaviour, PeerId, Swarm,
@@ -71,6 +74,9 @@ impl NetworkBehaviourEventProcess<MdnsEvent> for RobonomicsNetworkBehaviour {
                 if let Some(kad) = self.kademlia.as_mut() {
                     kad.add_address(&peer_id, multiaddr);
                 };
+
+                log::info!("Discovered!!!!");
+                // self.pubsub.add_explicit_peer(&peer_id);
             }
         }
     }
@@ -90,48 +96,43 @@ impl NetworkBehaviourEventProcess<KademliaEvent> for RobonomicsNetworkBehaviour 
                         );
                     }
                 }
-                QueryResult::GetClosestPeers(Ok(ok)) => {
-                    for peer in ok.peers {
-                        println!("Peer {:?}", peer);
+                QueryResult::GetProviders(Err(err)) => {
+                    eprintln!("Failed to get providers: {:?}", err);
+                }
+                QueryResult::GetRecord(Ok(ok)) => {
+                    for PeerRecord {
+                        record: Record { key, value, .. },
+                        ..
+                    } in ok.records
+                    {
+                        println!(
+                            "Got record {:?} {:?}",
+                            std::str::from_utf8(key.as_ref()).unwrap(),
+                            std::str::from_utf8(&value).unwrap(),
+                        );
                     }
                 }
-                // QueryResult::GetProviders(Err(err)) => {
-                //     eprintln!("Failed to get providers: {:?}", err);
-                // }
-                // QueryResult::GetRecord(Ok(ok)) => {
-                //     for PeerRecord {
-                //         record: Record { key, value, .. },
-                //         ..
-                //     } in ok.records
-                //     {
-                //         println!(
-                //             "Got record {:?} {:?}",
-                //             std::str::from_utf8(key.as_ref()).unwrap(),
-                //             std::str::from_utf8(&value).unwrap(),
-                //         );
-                //     }
-                // }
-                // QueryResult::GetRecord(Err(err)) => {
-                //     eprintln!("Failed to get record: {:?}", err);
-                // }
-                // QueryResult::PutRecord(Ok(PutRecordOk { key })) => {
-                //     println!(
-                //         "Successfully put record {:?}",
-                //         std::str::from_utf8(key.as_ref()).unwrap()
-                //     );
-                // }
-                // QueryResult::PutRecord(Err(err)) => {
-                //     eprintln!("Failed to put record: {:?}", err);
-                // }
-                // QueryResult::StartProviding(Ok(AddProviderOk { key })) => {
-                //     println!(
-                //         "Successfully put provider record {:?}",
-                //         std::str::from_utf8(key.as_ref()).unwrap()
-                //     );
-                // }
-                // QueryResult::StartProviding(Err(err)) => {
-                //     eprintln!("Failed to put provider record: {:?}", err);
-                // }
+                QueryResult::GetRecord(Err(err)) => {
+                    eprintln!("Failed to get record: {:?}", err);
+                }
+                QueryResult::PutRecord(Ok(PutRecordOk { key })) => {
+                    println!(
+                        "Successfully put record {:?}",
+                        std::str::from_utf8(key.as_ref()).unwrap()
+                    );
+                }
+                QueryResult::PutRecord(Err(err)) => {
+                    eprintln!("Failed to put record: {:?}", err);
+                }
+                QueryResult::StartProviding(Ok(AddProviderOk { key })) => {
+                    println!(
+                        "Successfully put provider record {:?}",
+                        std::str::from_utf8(key.as_ref()).unwrap()
+                    );
+                }
+                QueryResult::StartProviding(Err(err)) => {
+                    eprintln!("Failed to put provider record: {:?}", err);
+                }
                 _ => {}
             },
             _ => {}
@@ -142,7 +143,7 @@ impl NetworkBehaviourEventProcess<KademliaEvent> for RobonomicsNetworkBehaviour 
 impl NetworkBehaviourEventProcess<GossipsubEvent> for RobonomicsNetworkBehaviour {
     // Called when `gossipsub` produces an event.
     fn inject_event(&mut self, event: GossipsubEvent) {
-        log::info!("Gossipsub event");
+        log::info!("Gossipsub event: {:?}", event);
         if let GossipsubEvent::Message { message, .. } = event {
             log::info!("message: {:?}", message);
         }
@@ -162,6 +163,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Set up a an encrypted DNS-enabled TCP Transport.
     let transport = development_transport(local_key.clone()).await?;
 
+    // Create a Gossipsub topic
+    let discovery_topic = Topic::new("robonomics-discovery");
+
     let heartbeat_interval = args
         .heartbeat_interval
         .map_or(DEFAULT_HEARTBEAT_INTERVAL, |i| i);
@@ -179,8 +183,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .expect("Valid gossipsub config");
 
     // Create PubSub
-    let pubsub = Gossipsub::new(MessageAuthenticity::Signed(local_key), gossipsub_config)
+    let mut pubsub = Gossipsub::new(MessageAuthenticity::Signed(local_key), gossipsub_config)
         .expect("Correct configuration");
+
+    // Subscribes to discovery topic
+    pubsub.subscribe(&discovery_topic).unwrap();
 
     // Use mDNS.
     let mdns = if !args.disable_mdns {
@@ -215,13 +222,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
     swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
 
     loop {
-        select! {
-            event = swarm.select_next_some() => match event {
-                SwarmEvent::NewListenAddr { address, .. } => {
-                    println!("Listening in {:?}", address);
-                },
-                _ => {}
+        match swarm.select_next_some().await {
+            SwarmEvent::ConnectionEstablished { peer_id, .. } => {
+                println!("A: {:?}", peer_id);
             }
+            SwarmEvent::Behaviour(event) => {
+                println!("Event: {:?}", event);
+            }
+            SwarmEvent::NewListenAddr { address, .. } => {
+                println!("Listening on {:?}", address);
+            }
+            _ => {}
         }
     }
 }
