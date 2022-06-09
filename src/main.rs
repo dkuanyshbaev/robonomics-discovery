@@ -26,16 +26,10 @@ use libp2p::{
         MessageAuthenticity, MessageId,
     },
     identity,
-    // kad::{
-    //     record::store::MemoryStore, AddProviderOk, Kademlia, KademliaEvent, PeerRecord,
-    //     PutRecordOk, QueryResult, Record,
-    // },
     kad::{record::store::MemoryStore, Kademlia, KademliaEvent},
     mdns::{Mdns, MdnsConfig, MdnsEvent},
     swarm::{behaviour::toggle::Toggle, NetworkBehaviourEventProcess, SwarmEvent},
-    NetworkBehaviour,
-    PeerId,
-    Swarm,
+    NetworkBehaviour, PeerId, Swarm,
 };
 use std::{
     collections::hash_map::DefaultHasher,
@@ -72,20 +66,21 @@ struct RobonomicsNetworkBehaviour {
 impl NetworkBehaviourEventProcess<MdnsEvent> for RobonomicsNetworkBehaviour {
     // Called when `mdns` produces an event.
     fn inject_event(&mut self, event: MdnsEvent) {
-        log::info!("mdns event: {:?}", event);
         match event {
             MdnsEvent::Discovered(list) => {
                 for (peer_id, multiaddr) in list {
                     if let Some(kad) = self.kademlia.as_mut() {
                         kad.add_address(&peer_id, multiaddr);
                     };
-
-                    log::info!("Discovered!!!! {:?}", peer_id);
+                    log::info!("Discovered: {:?}", peer_id);
                 }
             }
             MdnsEvent::Expired(list) => {
-                for (peer_id, _multiaddr) in list {
-                    log::info!("Expired!!!! {:?}", peer_id);
+                for (peer_id, multiaddr) in list {
+                    if let Some(kad) = self.kademlia.as_mut() {
+                        kad.remove_address(&peer_id, &multiaddr);
+                    };
+                    log::info!("Expired: {:?}", peer_id);
                 }
             }
         }
@@ -96,6 +91,9 @@ impl NetworkBehaviourEventProcess<KademliaEvent> for RobonomicsNetworkBehaviour 
     // Called when `kademlia` produces an event.
     fn inject_event(&mut self, event: KademliaEvent) {
         match event {
+            KademliaEvent::RoutingUpdated { peer, .. } => {
+                log::info!("new peer: {:?}", peer);
+            }
             // KademliaEvent::InboundRequest { request } => {
             //     log::info!("here!");
             // }
@@ -105,9 +103,6 @@ impl NetworkBehaviourEventProcess<KademliaEvent> for RobonomicsNetworkBehaviour 
             // KademliaEvent::RoutablePeer { peer, address } => {
             //     log::info!("here!");
             // }
-            KademliaEvent::RoutingUpdated { peer, .. } => {
-                log::info!("new peer: {:?}", peer);
-            }
             // KademliaEvent::UnroutablePeer { peer } => {
             //     log::info!("here!");
             // }
@@ -123,9 +118,9 @@ impl NetworkBehaviourEventProcess<GossipsubEvent> for RobonomicsNetworkBehaviour
     // Called when `gossipsub` produces an event.
     fn inject_event(&mut self, event: GossipsubEvent) {
         log::info!("Gossipsub event: {:?}", event);
-        if let GossipsubEvent::Message { message, .. } = event {
-            log::info!("message: {:?}", message);
-        }
+        // if let GossipsubEvent::Message { message, .. } = event {
+        //     log::info!("message: {:?}", message);
+        // }
     }
 }
 
@@ -203,7 +198,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     loop {
         match swarm.select_next_some().await {
             SwarmEvent::ConnectionEstablished { peer_id, .. } => {
-                println!("A: {:?}", peer_id);
+                println!("Connected to: {:?}", peer_id);
             }
             SwarmEvent::Behaviour(event) => {
                 println!("Event: {:?}", event);
