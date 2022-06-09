@@ -16,7 +16,7 @@
 //
 ///////////////////////////////////////////////////////////////////////////////
 
-use async_std::{io, task};
+use async_std::task;
 use clap::Parser;
 use futures::{prelude::*, select};
 use libp2p::{
@@ -36,7 +36,7 @@ use libp2p::{
     NetworkBehaviour, PeerId, Swarm,
 };
 use std::{
-    collections::hash_map::{DefaultHasher, HashMap},
+    collections::hash_map::DefaultHasher,
     error::Error,
     hash::{Hash, Hasher},
     time::Duration,
@@ -67,7 +67,6 @@ impl NetworkBehaviourEventProcess<MdnsEvent> for MyBehaviour {
     fn inject_event(&mut self, event: MdnsEvent) {
         if let MdnsEvent::Discovered(list) = event {
             for (peer_id, multiaddr) in list {
-                log::info!(">>>> peer_id: {:?}, multiaddr: {:?}", peer_id, multiaddr);
                 self.kademlia.add_address(&peer_id, multiaddr);
             }
         }
@@ -86,6 +85,11 @@ impl NetworkBehaviourEventProcess<KademliaEvent> for MyBehaviour {
                             peer,
                             std::str::from_utf8(ok.key.as_ref()).unwrap()
                         );
+                    }
+                }
+                QueryResult::GetClosestPeers(Ok(ok)) => {
+                    for peer in ok.peers {
+                        println!("Peer {:?}", peer);
                     }
                 }
                 // QueryResult::GetProviders(Err(err)) => {
@@ -136,12 +140,9 @@ impl NetworkBehaviourEventProcess<GossipsubEvent> for MyBehaviour {
     // Called when `gossipsub` produces an event.
     fn inject_event(&mut self, event: GossipsubEvent) {
         log::info!("Gossipsub event");
-        // if let MdnsEvent::Discovered(list) = event {
-        //     for (peer_id, multiaddr) in list {
-        //         log::info!(">>>> peer_id: {:?}, multiaddr: {:?}", peer_id, multiaddr);
-        //         self.kademlia.add_address(&peer_id, multiaddr);
-        //     }
-        // }
+        if let GossipsubEvent::Message { message, .. } = event {
+            log::info!("message: {:?}", message);
+        }
     }
 }
 
@@ -160,17 +161,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Set up a an encrypted DNS-enabled TCP Transport over the Mplex protocol.
     let transport = development_transport(local_key.clone()).await?;
 
-    // ???
-    let heartbeat_interval = Duration::from_millis(1000);
-
     // Create a swarm to manage peers and events.
     let mut swarm = {
         let store = MemoryStore::new(local_peer_id);
         let kademlia = Kademlia::new(local_peer_id, store);
         let mdns = task::block_on(Mdns::new(MdnsConfig::default()))?;
-        //-------------------------------------------------------------
         let gossipsub_config = GossipsubConfigBuilder::default()
-            .heartbeat_interval(heartbeat_interval)
+            .heartbeat_interval(Duration::from_millis(1000))
             .message_id_fn(|message: &GossipsubMessage| {
                 // To content-address message,
                 // we can take the hash of message and use it as an ID.
@@ -180,11 +177,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             })
             .build()
             .expect("Valid gossipsub config");
-
         let pubsub = Gossipsub::new(MessageAuthenticity::Signed(local_key), gossipsub_config)
             .expect("Correct configuration");
-        //-------------------------------------------------------------
-
         let behaviour = MyBehaviour {
             kademlia,
             mdns,
@@ -192,9 +186,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         };
         Swarm::new(transport, behaviour, local_peer_id)
     };
-
-    // Read full lines from stdin
-    // let mut stdin = io::BufReader::new(io::stdin()).lines().fuse();
 
     // Listen on all interfaces and whatever port the OS assigns.
     swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
@@ -213,7 +204,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     loop {
         select! {
-            // line = stdin.select_next_some() => handle_input_line(&mut swarm.behaviour_mut().kademlia, line.expect("Stdin not to close")),
             event = swarm.select_next_some() => match event {
                 SwarmEvent::NewListenAddr { address, .. } => {
                     println!("Listening in {:?}", address);
