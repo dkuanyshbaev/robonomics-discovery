@@ -69,72 +69,105 @@ struct RobonomicsNetworkBehaviour {
 impl NetworkBehaviourEventProcess<MdnsEvent> for RobonomicsNetworkBehaviour {
     // Called when `mdns` produces an event.
     fn inject_event(&mut self, event: MdnsEvent) {
-        if let MdnsEvent::Discovered(list) = event {
-            for (peer_id, multiaddr) in list {
-                if let Some(kad) = self.kademlia.as_mut() {
-                    kad.add_address(&peer_id, multiaddr);
-                };
+        log::info!("mdns event: {:?}", event);
+        match event {
+            MdnsEvent::Discovered(list) => {
+                for (peer_id, multiaddr) in list {
+                    if let Some(kad) = self.kademlia.as_mut() {
+                        kad.add_address(&peer_id, multiaddr);
+                    };
 
-                log::info!("Discovered!!!!");
-                // self.pubsub.add_explicit_peer(&peer_id);
+                    // ???
+                    self.pubsub.add_explicit_peer(&peer_id);
+
+                    for val in self.pubsub.peer_protocol() {
+                        println!("Got: {:?}", val);
+                    }
+
+                    log::info!("Discovered!!!! {:?}", peer_id);
+                }
             }
+            MdnsEvent::Expired(list) => {
+                for (peer_id, multiaddr) in list {
+                    log::info!("Expired!!!! {:?}", peer_id);
+                }
+            }
+            _ => {}
         }
     }
 }
 
 impl NetworkBehaviourEventProcess<KademliaEvent> for RobonomicsNetworkBehaviour {
     // Called when `kademlia` produces an event.
-    fn inject_event(&mut self, message: KademliaEvent) {
-        match message {
-            KademliaEvent::OutboundQueryCompleted { result, .. } => match result {
-                QueryResult::GetProviders(Ok(ok)) => {
-                    for peer in ok.providers {
-                        println!(
-                            "Peer {:?} provides key {:?}",
-                            peer,
-                            std::str::from_utf8(ok.key.as_ref()).unwrap()
-                        );
-                    }
-                }
-                QueryResult::GetProviders(Err(err)) => {
-                    eprintln!("Failed to get providers: {:?}", err);
-                }
-                QueryResult::GetRecord(Ok(ok)) => {
-                    for PeerRecord {
-                        record: Record { key, value, .. },
-                        ..
-                    } in ok.records
-                    {
-                        println!(
-                            "Got record {:?} {:?}",
-                            std::str::from_utf8(key.as_ref()).unwrap(),
-                            std::str::from_utf8(&value).unwrap(),
-                        );
-                    }
-                }
-                QueryResult::GetRecord(Err(err)) => {
-                    eprintln!("Failed to get record: {:?}", err);
-                }
-                QueryResult::PutRecord(Ok(PutRecordOk { key })) => {
-                    println!(
-                        "Successfully put record {:?}",
-                        std::str::from_utf8(key.as_ref()).unwrap()
-                    );
-                }
-                QueryResult::PutRecord(Err(err)) => {
-                    eprintln!("Failed to put record: {:?}", err);
-                }
-                QueryResult::StartProviding(Ok(AddProviderOk { key })) => {
-                    println!(
-                        "Successfully put provider record {:?}",
-                        std::str::from_utf8(key.as_ref()).unwrap()
-                    );
-                }
-                QueryResult::StartProviding(Err(err)) => {
-                    eprintln!("Failed to put provider record: {:?}", err);
-                }
-                _ => {}
-            },
+    fn inject_event(&mut self, event: KademliaEvent) {
+        log::info!("Kad message: {:?}", event);
+        match event {
+            KademliaEvent::InboundRequest { request } => {
+                log::info!("here!");
+            }
+            KademliaEvent::PendingRoutablePeer { peer, address } => {
+                log::info!("here!");
+            }
+            KademliaEvent::RoutablePeer { peer, address } => {
+                log::info!("here!");
+            }
+            KademliaEvent::RoutingUpdated { peer, .. } => {
+                log::info!("here!");
+            }
+            KademliaEvent::UnroutablePeer { peer } => {
+                log::info!("here!");
+            }
+            KademliaEvent::OutboundQueryCompleted { result, .. } => {
+                log::info!("here!");
+                // KademliaEvent::OutboundQueryCompleted { result, .. } => match result {
+                // QueryResult::GetProviders(Ok(ok)) => {
+                //     for peer in ok.providers {
+                //         println!(
+                //             "Peer {:?} provides key {:?}",
+                //             peer,
+                //             std::str::from_utf8(ok.key.as_ref()).unwrap()
+                //         );
+                //     }
+                // }
+                // QueryResult::GetProviders(Err(err)) => {
+                //     eprintln!("Failed to get providers: {:?}", err);
+                // }
+                // QueryResult::GetRecord(Ok(ok)) => {
+                //     for PeerRecord {
+                //         record: Record { key, value, .. },
+                //         ..
+                //     } in ok.records
+                //     {
+                //         println!(
+                //             "Got record {:?} {:?}",
+                //             std::str::from_utf8(key.as_ref()).unwrap(),
+                //             std::str::from_utf8(&value).unwrap(),
+                //         );
+                //     }
+                // }
+                // QueryResult::GetRecord(Err(err)) => {
+                //     eprintln!("Failed to get record: {:?}", err);
+                // }
+                // QueryResult::PutRecord(Ok(PutRecordOk { key })) => {
+                //     println!(
+                //         "Successfully put record {:?}",
+                //         std::str::from_utf8(key.as_ref()).unwrap()
+                //     );
+                // }
+                // QueryResult::PutRecord(Err(err)) => {
+                //     eprintln!("Failed to put record: {:?}", err);
+                // }
+                // QueryResult::StartProviding(Ok(AddProviderOk { key })) => {
+                //     println!(
+                //         "Successfully put provider record {:?}",
+                //         std::str::from_utf8(key.as_ref()).unwrap()
+                //     );
+                // }
+                // QueryResult::StartProviding(Err(err)) => {
+                //     eprintln!("Failed to put provider record: {:?}", err);
+                // }
+                // _ => {}
+            }
             _ => {}
         }
     }
