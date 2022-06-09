@@ -26,13 +26,9 @@ use libp2p::{
         MessageId,
     },
     identity,
-    kad::{
-        record::{store::MemoryStore, Key},
-        AddProviderOk, Kademlia, KademliaEvent, PeerRecord, PutRecordOk, QueryResult, Quorum,
-        Record,
-    },
+    kad::{record::store::MemoryStore, Kademlia, KademliaEvent, QueryResult},
     mdns::{Mdns, MdnsConfig, MdnsEvent},
-    swarm::{NetworkBehaviourEventProcess, SwarmEvent},
+    swarm::{behaviour::toggle::Toggle, NetworkBehaviourEventProcess, SwarmEvent},
     NetworkBehaviour, PeerId, Swarm,
 };
 use std::{
@@ -41,6 +37,8 @@ use std::{
     hash::{Hash, Hasher},
     time::Duration,
 };
+
+const DEFAULT_HEARTBEAT_INTERVAL: u64 = 1000;
 
 // Cli args parser.
 #[derive(Parser, Debug)]
@@ -51,29 +49,34 @@ struct Args {
 
     #[clap(long)]
     disable_kad: bool,
+
+    #[clap(long)]
+    heartbeat_interval: Option<u64>,
 }
 
 // A custom network behaviour that combines Kademlia, mDNS, and Gossipsub.
 #[derive(NetworkBehaviour)]
 #[behaviour(event_process = true)]
-struct MyBehaviour {
-    kademlia: Kademlia<MemoryStore>,
-    mdns: Mdns,
+struct RobonomicsNetworkBehaviour {
     pubsub: Gossipsub,
+    mdns: Toggle<Mdns>,
+    kademlia: Toggle<Kademlia<MemoryStore>>,
 }
 
-impl NetworkBehaviourEventProcess<MdnsEvent> for MyBehaviour {
+impl NetworkBehaviourEventProcess<MdnsEvent> for RobonomicsNetworkBehaviour {
     // Called when `mdns` produces an event.
     fn inject_event(&mut self, event: MdnsEvent) {
         if let MdnsEvent::Discovered(list) = event {
             for (peer_id, multiaddr) in list {
-                self.kademlia.add_address(&peer_id, multiaddr);
+                if let Some(kad) = self.kademlia.as_mut() {
+                    kad.add_address(&peer_id, multiaddr);
+                };
             }
         }
     }
 }
 
-impl NetworkBehaviourEventProcess<KademliaEvent> for MyBehaviour {
+impl NetworkBehaviourEventProcess<KademliaEvent> for RobonomicsNetworkBehaviour {
     // Called when `kademlia` produces an event.
     fn inject_event(&mut self, message: KademliaEvent) {
         match message {
@@ -136,7 +139,7 @@ impl NetworkBehaviourEventProcess<KademliaEvent> for MyBehaviour {
     }
 }
 
-impl NetworkBehaviourEventProcess<GossipsubEvent> for MyBehaviour {
+impl NetworkBehaviourEventProcess<GossipsubEvent> for RobonomicsNetworkBehaviour {
     // Called when `gossipsub` produces an event.
     fn inject_event(&mut self, event: GossipsubEvent) {
         log::info!("Gossipsub event");
@@ -149,8 +152,6 @@ impl NetworkBehaviourEventProcess<GossipsubEvent> for MyBehaviour {
 #[async_std::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     env_logger::init();
-
-    // Get cli args.
     let args = Args::parse();
 
     // Create a random PeerId.
@@ -158,49 +159,60 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let local_peer_id = PeerId::from(local_key.public());
     log::info!("Local peer ID: {:?}", local_peer_id);
 
-    // Set up a an encrypted DNS-enabled TCP Transport over the Mplex protocol.
+    // Set up a an encrypted DNS-enabled TCP Transport.
     let transport = development_transport(local_key.clone()).await?;
 
-    // Create a swarm to manage peers and events.
-    let mut swarm = {
+    let heartbeat_interval = args
+        .heartbeat_interval
+        .map_or(DEFAULT_HEARTBEAT_INTERVAL, |i| i);
+
+    let gossipsub_config = GossipsubConfigBuilder::default()
+        .heartbeat_interval(Duration::from_millis(heartbeat_interval))
+        .message_id_fn(|message: &GossipsubMessage| {
+            // To content-address message,
+            // we can take the hash of message and use it as an ID.
+            let mut s = DefaultHasher::new();
+            message.data.hash(&mut s);
+            MessageId::from(s.finish().to_string())
+        })
+        .build()
+        .expect("Valid gossipsub config");
+
+    // Create PubSub
+    let pubsub = Gossipsub::new(MessageAuthenticity::Signed(local_key), gossipsub_config)
+        .expect("Correct configuration");
+
+    // Use mDNS.
+    let mdns = if !args.disable_mdns {
+        log::info!("Using mDNS discovery service.");
+        let mdns = task::block_on(Mdns::new(MdnsConfig::default()))?;
+        Toggle::from(Some(mdns))
+    } else {
+        Toggle::from(None)
+    };
+
+    // Use DHT.
+    let kademlia = if !args.disable_kad {
+        log::info!("Using mDNS discovery service.");
         let store = MemoryStore::new(local_peer_id);
         let kademlia = Kademlia::new(local_peer_id, store);
-        let mdns = task::block_on(Mdns::new(MdnsConfig::default()))?;
-        let gossipsub_config = GossipsubConfigBuilder::default()
-            .heartbeat_interval(Duration::from_millis(1000))
-            .message_id_fn(|message: &GossipsubMessage| {
-                // To content-address message,
-                // we can take the hash of message and use it as an ID.
-                let mut s = DefaultHasher::new();
-                message.data.hash(&mut s);
-                MessageId::from(s.finish().to_string())
-            })
-            .build()
-            .expect("Valid gossipsub config");
-        let pubsub = Gossipsub::new(MessageAuthenticity::Signed(local_key), gossipsub_config)
-            .expect("Correct configuration");
-        let behaviour = MyBehaviour {
-            kademlia,
-            mdns,
-            pubsub,
-        };
-        Swarm::new(transport, behaviour, local_peer_id)
+        Toggle::from(Some(kademlia))
+    } else {
+        Toggle::from(None)
     };
+
+    // Custom NetworkBehaviour.
+    let behaviour = RobonomicsNetworkBehaviour {
+        kademlia,
+        mdns,
+        pubsub,
+    };
+
+    // Create a swarm to manage peers and events.
+    let mut swarm = Swarm::new(transport, behaviour, local_peer_id);
 
     // Listen on all interfaces and whatever port the OS assigns.
     swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
-
-    // Start DHT.
-    // if !args.disable_kad {
-    //     log::info!("Starting DHT discovery service.");
-    //     protocol::dht::kad(local_key.clone(), local_peer_id.clone()).await?;
-    // }
-
-    // Start mDNS.
-    // if !args.disable_mdns {
-    //     log::info!("Starting MDNS discovery service.");
-    //     protocol::mdns::mdns(local_key, local_peer_id).await?;
-    // }
 
     loop {
         select! {
