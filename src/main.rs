@@ -38,8 +38,6 @@ use std::{
     time::Duration,
 };
 
-const DEFAULT_HEARTBEAT_INTERVAL: u64 = 1000;
-
 // Cli args parser.
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
@@ -50,8 +48,8 @@ struct Args {
     #[clap(long)]
     disable_kad: bool,
 
-    #[clap(long)]
-    heartbeat_interval: Option<u64>,
+    #[clap(long, default_value_t = 1000)]
+    heartbeat_interval: u64,
 }
 
 // A custom network behaviour that combines Kademlia, mDNS, and Gossipsub.
@@ -67,6 +65,7 @@ impl NetworkBehaviourEventProcess<MdnsEvent> for RobonomicsNetworkBehaviour {
     // Called when `mdns` produces an event.
     fn inject_event(&mut self, event: MdnsEvent) {
         match event {
+            // Discovered nodes through mDNS.
             MdnsEvent::Discovered(list) => {
                 for (peer_id, multiaddr) in list {
                     if let Some(kad) = self.kademlia.as_mut() {
@@ -75,6 +74,7 @@ impl NetworkBehaviourEventProcess<MdnsEvent> for RobonomicsNetworkBehaviour {
                     log::info!("Discovered: {:?}", peer_id);
                 }
             }
+            // The given combinations of PeerId and Multiaddr have expired.
             MdnsEvent::Expired(list) => {
                 for (peer_id, multiaddr) in list {
                     if let Some(kad) = self.kademlia.as_mut() {
@@ -91,8 +91,11 @@ impl NetworkBehaviourEventProcess<KademliaEvent> for RobonomicsNetworkBehaviour 
     // Called when `kademlia` produces an event.
     fn inject_event(&mut self, event: KademliaEvent) {
         match event {
+            // The routing table has been updated with a new peer/address
             KademliaEvent::RoutingUpdated { peer, .. } => {
                 log::info!("new peer: {:?}", peer);
+
+                self.pubsub.add_explicit_peer(&peer);
             }
             // KademliaEvent::InboundRequest { request } => {
             //     log::info!("here!");
@@ -140,12 +143,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Create a Gossipsub topic
     let discovery_topic = Topic::new("robonomics-discovery");
 
-    let heartbeat_interval = args
-        .heartbeat_interval
-        .map_or(DEFAULT_HEARTBEAT_INTERVAL, |i| i);
-
     let gossipsub_config = GossipsubConfigBuilder::default()
-        .heartbeat_interval(Duration::from_millis(heartbeat_interval))
+        .heartbeat_interval(Duration::from_millis(args.heartbeat_interval))
         .message_id_fn(|message: &GossipsubMessage| {
             // To content-address message,
             // we can take the hash of message and use it as an ID.
@@ -197,9 +196,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     loop {
         match swarm.select_next_some().await {
+            // ???
             SwarmEvent::ConnectionEstablished { peer_id, .. } => {
                 println!("Connected to: {:?}", peer_id);
             }
+            // ???
             SwarmEvent::Behaviour(event) => {
                 println!("Event: {:?}", event);
             }
