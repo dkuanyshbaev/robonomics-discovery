@@ -15,6 +15,7 @@
 //  limitations under the License.
 //
 ///////////////////////////////////////////////////////////////////////////////
+//! Robonomics Network discovery service.
 
 use async_std::task;
 use clap::Parser;
@@ -22,8 +23,8 @@ use futures::prelude::*;
 use libp2p::{
     development_transport,
     gossipsub::{
-        Gossipsub, GossipsubConfigBuilder, GossipsubEvent, GossipsubMessage, IdentTopic as Topic,
-        MessageAuthenticity, MessageId,
+        Gossipsub, GossipsubConfigBuilder, GossipsubEvent, GossipsubMessage, MessageAuthenticity,
+        MessageId,
     },
     identity,
     kad::{record::store::MemoryStore, Kademlia, KademliaEvent},
@@ -35,6 +36,7 @@ use std::{
     collections::hash_map::DefaultHasher,
     error::Error,
     hash::{Hash, Hasher},
+    str::FromStr,
     time::Duration,
 };
 
@@ -50,6 +52,9 @@ struct Args {
 
     #[clap(long, default_value_t = 1000)]
     heartbeat_interval: u64,
+
+    #[clap(long, default_value_t = ("").to_string())]
+    bootnodes: String,
 }
 
 // A custom network behaviour that combines Kademlia, mDNS, and Gossipsub.
@@ -98,19 +103,19 @@ impl NetworkBehaviourEventProcess<KademliaEvent> for RobonomicsNetworkBehaviour 
                 // self.pubsub.add_explicit_peer(&peer);
             }
             // KademliaEvent::InboundRequest { request } => {
-            //     log::info!("here!");
+            //     log::info!("InboundRequest!");
             // }
             // KademliaEvent::PendingRoutablePeer { peer, address } => {
-            //     log::info!("here!");
+            //     log::info!("PendingRoutablePeer!");
             // }
             // KademliaEvent::RoutablePeer { peer, address } => {
-            //     log::info!("here!");
+            //     log::info!("RoutablePeer!");
             // }
             // KademliaEvent::UnroutablePeer { peer } => {
-            //     log::info!("here!");
+            //     log::info!("UnroutablePeer!");
             // }
             // KademliaEvent::OutboundQueryCompleted { result, .. } => {
-            //     log::info!("here!");
+            //     log::info!("OutboundQueryCompleted!");
             // }
             _ => {}
         }
@@ -140,9 +145,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Set up a an encrypted DNS-enabled TCP Transport.
     let transport = development_transport(local_key.clone()).await?;
 
-    // Create a Gossipsub topic
-    let discovery_topic = Topic::new("robonomics-discovery");
-
     let gossipsub_config = GossipsubConfigBuilder::default()
         .heartbeat_interval(Duration::from_millis(args.heartbeat_interval))
         .message_id_fn(|message: &GossipsubMessage| {
@@ -156,11 +158,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .expect("Valid gossipsub config");
 
     // Create PubSub
-    let mut pubsub = Gossipsub::new(MessageAuthenticity::Signed(local_key), gossipsub_config)
+    let pubsub = Gossipsub::new(MessageAuthenticity::Signed(local_key), gossipsub_config)
         .expect("Correct configuration");
-
-    // Subscribes to discovery topic
-    pubsub.subscribe(&discovery_topic).unwrap();
 
     // Use mDNS.
     let mdns = if !args.disable_mdns {
@@ -171,11 +170,25 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Toggle::from(None)
     };
 
+    // Parse bootnodes.
+    let bootnodes: Vec<&str> = args.bootnodes.split(",").map(|s| s.trim()).collect();
+    let mut boot_peers: Vec<PeerId> = vec![];
+    for node in bootnodes {
+        if let Ok(peer) = PeerId::from_str(node) {
+            boot_peers.push(peer)
+        }
+    }
+
     // Use DHT.
     let kademlia = if !args.disable_kad {
         log::info!("Using DHT discovery service.");
         let store = MemoryStore::new(local_peer_id);
-        let kademlia = Kademlia::new(local_peer_id, store);
+        let mut kademlia = Kademlia::new(local_peer_id, store);
+        let bootaddr = libp2p::Multiaddr::from_str("/dnsaddr/bootstrap.libp2p.io")?;
+        for peer in &boot_peers {
+            log::info!("Adding bootnode: {:?}", peer);
+            kademlia.add_address(&peer, bootaddr.clone());
+        }
         Toggle::from(Some(kademlia))
     } else {
         Toggle::from(None)
@@ -213,3 +226,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 }
+
+// OutgoingConnectionError {
+//     peer_id: Some(PeerId("12D3KooWHA8vwLAodxSfmj9CuPny96MyrwRJ7sMdvhqh9XbgSZdL")),
+//     error: Transport([("/ip4/192.168.1.41/tcp/30333/ws/p2p/12D3KooWHA8vwLAodxSfmj9CuPny96MyrwRJ7sMdvhqh9XbgSZdL",
+//
+//     Other(Custom { kind: Other,
+//     error: Other(A(A(A(MultiaddrNotSupported("/ip4/192.168.1.41/tcp/30333/ws/p2p/12D3KooWHA8vwLAodxSfmj9CuPny96MyrwRJ7sMdvhqh9XbgSZdL"))))) })),
+//     ("/ip4/127.0.0.1/tcp/30333/ws/p2p/12D3KooWHA8vwLAodxSfmj9CuPny96MyrwRJ7sMdvhqh9XbgSZdL",
+//
+//     Other(Custom { kind: Other,
+//     error: Other(A(A(A(MultiaddrNotSupported("/ip4/127.0.0.1/tcp/30333/ws/p2p/12D3KooWHA8vwLAodxSfmj9CuPny96MyrwRJ7sMdvhqh9XbgSZdL"))))) })),
+//     ("/ip6/::1/tcp/30333/ws/p2p/12D3KooWHA8vwLAodxSfmj9CuPny96MyrwRJ7sMdvhqh9XbgSZdL",
+//
+//     Other(Custom { kind: Other,
+//     error: Other(A(A(A(MultiaddrNotSupported("/ip6/::1/tcp/30333/ws/p2p/12D3KooWHA8vwLAodxSfmj9CuPny96MyrwRJ7sMdvhqh9XbgSZdL"))))) })),
+//     ("/ip6/fe80::38ca:f717:9740:eca/tcp/30333/ws/p2p/12D3KooWHA8vwLAodxSfmj9CuPny96MyrwRJ7sMdvhqh9XbgSZdL",
+//
+//     Other(Custom { kind: Other,
+//     error: Other(A(A(A(MultiaddrNotSupported("/ip6/fe80::38ca:f717:9740:eca/tcp/30333/ws/p2p/12D3KooWHA8vwLAodxSfmj9CuPny96MyrwRJ7sMdvhqh9XbgSZdL"))))) }))]) }
