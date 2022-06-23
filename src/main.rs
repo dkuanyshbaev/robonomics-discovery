@@ -21,6 +21,7 @@ use async_std::task;
 use clap::Parser;
 use futures::prelude::*;
 use libp2p::{
+    core::multiaddr::Protocol,
     development_transport,
     gossipsub::{
         Gossipsub, GossipsubConfigBuilder, GossipsubEvent, GossipsubMessage, MessageAuthenticity,
@@ -30,7 +31,7 @@ use libp2p::{
     kad::{record::store::MemoryStore, Kademlia, KademliaEvent},
     mdns::{Mdns, MdnsConfig, MdnsEvent},
     swarm::{behaviour::toggle::Toggle, NetworkBehaviourEventProcess, SwarmEvent},
-    NetworkBehaviour, PeerId, Swarm,
+    Multiaddr, NetworkBehaviour, PeerId, Swarm,
 };
 use std::{
     collections::hash_map::DefaultHasher,
@@ -73,8 +74,18 @@ impl NetworkBehaviourEventProcess<MdnsEvent> for RobonomicsNetworkBehaviour {
             // Discovered nodes through mDNS.
             MdnsEvent::Discovered(list) => {
                 for (peer_id, multiaddr) in list {
+                    // Remove Ws component from multiaddr.
+                    let mut no_ws_multiaddr = Multiaddr::empty();
+                    for comp in multiaddr.iter() {
+                        match comp {
+                            Protocol::Ws(_) => continue,
+                            _ => no_ws_multiaddr.push(comp),
+                        };
+                    }
+
+                    // Add multiaddr to kad.
                     if let Some(kad) = self.kademlia.as_mut() {
-                        kad.add_address(&peer_id, multiaddr);
+                        kad.add_address(&peer_id, no_ws_multiaddr);
                     };
                     log::info!("Discovered: {:?}", peer_id);
                 }
@@ -185,6 +196,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let store = MemoryStore::new(local_peer_id);
         let mut kademlia = Kademlia::new(local_peer_id, store);
         let bootaddr = libp2p::Multiaddr::from_str("/dnsaddr/bootstrap.libp2p.io")?;
+        // Adding robonomics bootnodes.
         for peer in &boot_peers {
             log::info!("Adding bootnode: {:?}", peer);
             kademlia.add_address(&peer, bootaddr.clone());
