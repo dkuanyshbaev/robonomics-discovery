@@ -231,19 +231,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Toggle::from(None)
     };
 
-    // let num_connections = 0;
-    // let pending_events = VecDeque::new();
-    // let kademlias = HashMap::new();
-
     // Custom NetworkBehaviour.
     let behaviour = RobonomicsNetworkBehaviour {
         // TODO: add reqresp
         kademlia,
         mdns,
         pubsub,
-        // num_connections,
-        // pending_events,
-        // kademlias,
     };
 
     // Create a swarm to manage peers and events.
