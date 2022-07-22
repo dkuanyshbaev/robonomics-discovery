@@ -21,8 +21,8 @@ use async_std::task;
 use clap::Parser;
 use futures::prelude::*;
 use libp2p::{
-    // core::multiaddr::Protocol,
     core::connection::ConnectionId,
+    core::multiaddr::Protocol,
     development_transport,
     gossipsub::{
         Gossipsub, GossipsubConfigBuilder, GossipsubEvent, GossipsubMessage, MessageAuthenticity,
@@ -38,10 +38,7 @@ use libp2p::{
         IntoConnectionHandler, NetworkBehaviour, NetworkBehaviourAction,
         NetworkBehaviourEventProcess, PollParameters, SwarmEvent,
     },
-    // Multiaddr,
-    NetworkBehaviour,
-    PeerId,
-    Swarm,
+    Multiaddr, NetworkBehaviour, PeerId, Swarm,
 };
 use std::{
     collections::{hash_map::DefaultHasher, HashMap, VecDeque},
@@ -404,21 +401,27 @@ impl NetworkBehaviourEventProcess<MdnsEvent> for RobonomicsNetworkBehaviour {
                     //         _ => no_ws_multiaddr.push(comp),
                     //     };
                     // }
+                    // log::info!("no_ws_multiaddr: {:?}", no_ws_multiaddr);
+
+                    // self.pubsub.add_explicit_peer(&peer_id);
+
+                    // let a = PeerId::try_from_multiaddr(peer).expect("multiaddr!");
+                    // self.pubsub.add_explicit_peer(a);
 
                     // Add multiaddr to kad.
-                    // if let Some(kad) = self.kademlia.as_mut() {
-                    //     // kad.add_address(&peer_id, no_ws_multiaddr);
-                    //     kad.add_address(&peer_id, multiaddr);
-                    // };
+                    if let Some(kad) = self.kademlia.as_mut() {
+                        // kad.add_address(&peer_id, no_ws_multiaddr);
+                        kad.add_address(&peer_id, multiaddr);
+                    };
                     log::info!("mDns discovered: {:?}", peer_id);
                 }
             }
             // The given combinations of PeerId and Multiaddr have expired.
             MdnsEvent::Expired(list) => {
                 for (peer_id, multiaddr) in list {
-                    // if let Some(kad) = self.kademlia.as_mut() {
-                    //     kad.remove_address(&peer_id, &multiaddr);
-                    // };
+                    if let Some(kad) = self.kademlia.as_mut() {
+                        kad.remove_address(&peer_id, &multiaddr);
+                    };
                     log::info!("mDns expired: {:?}", peer_id);
                 }
             }
@@ -434,23 +437,58 @@ impl NetworkBehaviourEventProcess<KademliaEvent> for RobonomicsNetworkBehaviour 
             KademliaEvent::RoutingUpdated { peer, .. } => {
                 log::info!("Kad new peer: {:?}", peer);
 
-                // self.pubsub.add_explicit_peer(&peer);
+                // let a = self.kademlia.as_mut().expect("").bootstrap();
+                // log::info!("a: {:?}", a);
+
+                // -----------------------------------------------
+                // for a in kademlia.kbuckets() {
+                //     for i in a.iter() {
+                //         log::info!(
+                //             "))))))) {:?}, {:?}, {:?}",
+                //             i.status,
+                //             i.node.key,
+                //             i.node.value
+                //         );
+                //     }
+                // }
+                // -----------------------------------------------
+
+                // Remove Ws component from multiaddr.
+                // let mut no_ws_multiaddr = Multiaddr::empty();
+                // for comp in peer.iter() {
+                //     match comp {
+                //         Protocol::Ws(_) => continue,
+                //         _ => no_ws_multiaddr.push(comp),
+                //     };
+                // }
+
+                // /ip4/192.168.1.41/tcp/30333/ws/p2p/12D3KooWNCxspqHtLkiBkHowtqjs2wWzSVAo58cuEBCLve1kvAfw
+
+                self.pubsub.add_explicit_peer(&peer);
+
+                // let ps = self.pubsub.all_peers();
+                // for p in ps {
+                //     log::info!("---- pubsub peer: {:?}", p);
+                // }
+
+                // let a = PeerId::try_from_multiaddr(peer).expect("multiaddr!");
+                // self.pubsub.add_explicit_peer(a);
             }
-            // KademliaEvent::InboundRequest { request } => {
-            //     log::info!("InboundRequest!");
-            // }
-            // KademliaEvent::PendingRoutablePeer { peer, address } => {
-            //     log::info!("PendingRoutablePeer!");
-            // }
-            // KademliaEvent::RoutablePeer { peer, address } => {
-            //     log::info!("RoutablePeer!");
-            // }
-            // KademliaEvent::UnroutablePeer { peer } => {
-            //     log::info!("UnroutablePeer!");
-            // }
-            // KademliaEvent::OutboundQueryCompleted { result, .. } => {
-            //     log::info!("OutboundQueryCompleted!");
-            // }
+            KademliaEvent::InboundRequest { request } => {
+                log::info!("InboundRequest! {:?}", request);
+            }
+            KademliaEvent::PendingRoutablePeer { peer, address } => {
+                log::info!("PendingRoutablePeer! {:?}, {:?}", peer, address);
+            }
+            KademliaEvent::RoutablePeer { peer, address } => {
+                log::info!("RoutablePeer! {:?}, {:?}", peer, address);
+            }
+            KademliaEvent::UnroutablePeer { peer } => {
+                log::info!("UnroutablePeer! {:?}", peer);
+            }
+            KademliaEvent::OutboundQueryCompleted { result, .. } => {
+                log::info!("OutboundQueryCompleted! {:?}", result);
+            }
             // _ => {}
             event => {
                 println!("kad >>>>>>>>> {:?}", event);
@@ -495,7 +533,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .expect("Valid gossipsub config");
 
     // Create PubSub
-    let pubsub = Gossipsub::new(MessageAuthenticity::Signed(local_key), gossipsub_config)
+    let mut pubsub = Gossipsub::new(MessageAuthenticity::Signed(local_key), gossipsub_config)
         .expect("Correct configuration");
 
     // Use mDNS.
@@ -509,10 +547,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Parse bootnodes.
     let bootnodes: Vec<&str> = args.bootnodes.split(",").map(|s| s.trim()).collect();
-    let mut boot_peers: Vec<PeerId> = vec![];
+    let mut boot_peers: Vec<(PeerId, Multiaddr)> = vec![];
     for node in bootnodes {
-        if let Ok(peer) = PeerId::from_str(node) {
-            boot_peers.push(peer)
+        if let Ok(mut multiaddress) = Multiaddr::from_str(node) {
+            if let Some(peer_id) = PeerId::try_from_multiaddr(&multiaddress) {
+                if let Some(_) = multiaddress.pop() {
+                    boot_peers.push((peer_id, multiaddress));
+                }
+            }
         }
     }
 
@@ -521,11 +563,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         log::info!("Using DHT discovery service.");
         let store = MemoryStore::new(local_peer_id);
         let mut kademlia = Kademlia::new(local_peer_id, store);
-        let bootaddr = libp2p::Multiaddr::from_str("/dnsaddr/bootstrap.libp2p.io")?;
         // Adding robonomics bootnodes.
-        for peer in &boot_peers {
+        for (peer, bootaddr) in boot_peers {
             log::info!("Adding bootnode: {:?}", peer);
-            kademlia.add_address(&peer, bootaddr.clone());
+            kademlia.add_address(&peer, bootaddr);
         }
         Toggle::from(Some(kademlia))
     } else {
